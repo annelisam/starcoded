@@ -60,6 +60,43 @@ export function toGray(rgba: Uint8ClampedArray): Uint8ClampedArray {
 
 export type Analysis = { sides: number; motion: number; aligned: boolean; still: boolean };
 
+// Average change per pixel inside a region between two samples.
+// Each sample is measured against its own average brightness first, so a webcam that brightens or
+// dims the whole picture does not register as something new in the outline.
+export function regionDiff(a: Uint8ClampedArray, b: Uint8ClampedArray, w: number, h: number, r: Region): number {
+  const xa = Math.max(0, Math.round(r.x));
+  const xb = Math.min(w - 1, Math.round(r.x + r.w));
+  const ya = Math.max(0, Math.round(r.y));
+  const yb = Math.min(h - 1, Math.round(r.y + r.h));
+  let sumA = 0;
+  let sumB = 0;
+  let n = 0;
+  for (let y = ya; y <= yb; y += 2) {
+    for (let x = xa; x <= xb; x += 2) {
+      sumA += a[y * w + x];
+      sumB += b[y * w + x];
+      n++;
+    }
+  }
+  if (!n) return 0;
+  const shift = (sumA - sumB) / n;
+  let d = 0;
+  for (let y = ya; y <= yb; y += 2) {
+    for (let x = xa; x <= xb; x += 2) {
+      d += Math.abs(a[y * w + x] - b[y * w + x] - shift);
+    }
+  }
+  return d / n;
+}
+
+const SEGMENTS = 4;
+
+// Looks for a card inside the outline `r`.
+//
+// A card edge is a long straight line with the same light-to-dark direction along its whole length.
+// A face, a shoulder, or a cluttered shelf has curved or broken edges, so each side of the outline is
+// split into four segments and at least three of them must show the same edge on the same line.
+// The sides that are found must also agree on whether the inside is lighter or darker than the outside.
 export function analyze(
   gray: Uint8ClampedArray,
   prev: Uint8ClampedArray | null,
@@ -71,7 +108,7 @@ export function analyze(
   const clampX = (x: number) => Math.max(1, Math.min(w - 2, Math.round(x)));
   const clampY = (y: number) => Math.max(1, Math.min(h - 2, Math.round(y)));
 
-  // Texture level of the whole frame, so busy backgrounds raise the bar.
+  // Texture level of the whole frame, so busy scenes raise the bar.
   let sum = 0;
   let n = 0;
   for (let y = 1; y < h - 1; y += 3) {
@@ -80,54 +117,62 @@ export function analyze(
       n += 2;
     }
   }
-  const floor = Math.max(16, (sum / n) * 2.5);
+  const floor = Math.max(14, (sum / n) * 1.5);
 
   const tolX = Math.max(2, Math.round(r.w * 0.12));
   const tolY = Math.max(2, Math.round(r.h * 0.08));
-  const y0 = clampY(r.y + r.h * 0.15);
-  const y1 = clampY(r.y + r.h * 0.85);
-  const x0 = clampX(r.x + r.w * 0.15);
-  const x1 = clampX(r.x + r.w * 0.85);
 
-  const vertical = (cx: number) => {
+  // Returns +1 or -1 for the direction of a straight edge near the given line, or 0 if there is none.
+  const edge = (vertical: boolean, center: number): number => {
+    const tol = vertical ? tolX : tolY;
+    const from = vertical ? r.y + r.h * 0.1 : r.x + r.w * 0.1;
+    const span = (vertical ? r.h : r.w) * 0.8;
+    // Cards are rarely perfectly square to the camera, so each line is also tried with a slight lean.
+    const lean = Math.max(1, Math.round(span * 0.09));
     let best = 0;
-    for (let dx = -tolX; dx <= tolX; dx++) {
-      const x = clampX(cx + dx);
-      let s = 0;
-      for (let y = y0; y <= y1; y++) s += Math.abs(at(x + 1, y) - at(x - 1, y));
-      best = Math.max(best, s / (y1 - y0 + 1));
-    }
-    return best;
-  };
-  const horizontal = (cy: number) => {
-    let best = 0;
-    for (let dy = -tolY; dy <= tolY; dy++) {
-      const y = clampY(cy + dy);
-      let s = 0;
-      for (let x = x0; x <= x1; x++) s += Math.abs(at(x, y + 1) - at(x, y - 1));
-      best = Math.max(best, s / (x1 - x0 + 1));
-    }
-    return best;
-  };
-
-  const scores = [vertical(r.x), vertical(r.x + r.w), horizontal(r.y), horizontal(r.y + r.h)];
-  const sides = scores.filter((s) => s >= floor).length;
-
-  // Movement inside the outline since the previous sample.
-  let motion = 255;
-  if (prev) {
-    let d = 0;
-    let m = 0;
-    for (let y = clampY(r.y); y <= clampY(r.y + r.h); y += 2) {
-      for (let x = clampX(r.x); x <= clampX(r.x + r.w); x += 2) {
-        d += Math.abs(gray[y * w + x] - prev[y * w + x]);
-        m++;
+    let bestSign = 0;
+    for (let d = -tol; d <= tol; d++) {
+      for (let slope = -lean; slope <= lean; slope++) {
+        let pos = 0;
+        let neg = 0;
+        let strength = 0;
+        for (let k = 0; k < SEGMENTS; k++) {
+          const a = Math.round(from + (span * k) / SEGMENTS);
+          const b = Math.round(from + (span * (k + 1)) / SEGMENTS);
+          let g = 0;
+          for (let t = a; t < b; t++) {
+            const off = center + d + slope * ((t - from) / span - 0.5);
+            if (vertical) {
+              const x = clampX(off);
+              g += at(x + 1, clampY(t)) - at(x - 1, clampY(t));
+            } else {
+              const y = clampY(off);
+              g += at(clampX(t), y + 1) - at(clampX(t), y - 1);
+            }
+          }
+          g /= Math.max(1, b - a);
+          if (g >= floor) pos++;
+          else if (g <= -floor) neg++;
+          strength += Math.abs(g);
+        }
+        if (Math.max(pos, neg) >= SEGMENTS - 1 && strength > best) {
+          best = strength;
+          bestSign = pos >= neg ? 1 : -1;
+        }
       }
     }
-    motion = d / m;
-  }
+    return bestSign;
+  };
+
+  // Convert each edge direction to "inside is lighter" (+1) or "inside is darker" (-1).
+  const inward = [edge(true, r.x), -edge(true, r.x + r.w), edge(false, r.y), -edge(false, r.y + r.h)];
+  const found = inward.filter((s) => s !== 0);
+  const sides = found.length;
+  const agree = found.every((s) => s === found[0]);
+
+  const motion = prev ? regionDiff(gray, prev, w, h, r) : 255;
 
   // Fingers usually cover part of one edge, so three clean sides count as a card.
   // A hand-held card always trembles a little, so stillness allows for small movement.
-  return { sides, motion, aligned: sides >= 3, still: motion < STILL };
+  return { sides, motion, aligned: sides >= 3 && agree, still: motion < STILL };
 }

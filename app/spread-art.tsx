@@ -24,17 +24,19 @@ function layout(slots: Slots) {
 export const ONE_SLOT: Slots = [{ x: 0, y: 0 }];
 
 // Outlines drawn over the live camera.
-// `state` drives the single-card target: searching (dashed), locking (outline draws itself), done.
+// `state` drives the target: searching (dashed), locking (outline draws itself), checking (pulses), done.
 export function Guide({
   slots,
   firstNumber = 1,
   state,
   filled,
+  numbers = true,
 }: {
   slots: Slots;
   firstNumber?: number;
-  state?: "searching" | "locking" | "done";
+  state?: "searching" | "locking" | "checking" | "done";
   filled?: boolean[];
+  numbers?: boolean;
 }) {
   const { boxes, viewBox } = layout(slots);
   return (
@@ -44,9 +46,11 @@ export function Guide({
           <rect className="guide-shadow" x={b.x} y={b.y} width={b.w} height={b.h} rx={0.8} />
           <rect className="guide-line" x={b.x} y={b.y} width={b.w} height={b.h} rx={0.8} />
           {state && <rect className="guide-progress" x={b.x} y={b.y} width={b.w} height={b.h} rx={0.8} pathLength={1} />}
-          <text className="guide-number" x={b.lx} y={b.ly} textAnchor="middle" dominantBaseline="central">
-            {i + firstNumber}
-          </text>
+          {numbers && (
+            <text className="guide-number" x={b.lx} y={b.ly} textAnchor="middle" dominantBaseline="central">
+              {i + firstNumber}
+            </text>
+          )}
         </g>
       ))}
     </svg>

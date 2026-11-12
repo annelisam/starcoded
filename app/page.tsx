@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExter
 import QRCode from "qrcode";
 import { CARDS, getCard, verdict } from "@/lib/cards";
 import { SPREADS, getSpread } from "@/lib/spreads";
-import { STILL, analyze, brightness, cardRegion, slotRegions, toGray } from "@/lib/detect";
+import { STILL, analyze, brightness, cardRegion, regionDiff, slotRegions, toGray } from "@/lib/detect";
 import { Guide, ONE_SLOT, SpreadMap } from "./spread-art";
 
 type Stage = "ask" | "identifying" | "confirm" | "reading";
@@ -19,11 +19,14 @@ type Flyer = { src: string; from: DOMRect; to: DOMRect; index: number };
 const SPREAD_EDGE = 1568;
 const CARD_EDGE = 1024;
 const HOLD_MS = 900; // how long a card must sit still in the outline before it is captured
-const CLEAR_MS = 800; // how long the outline must stay empty before the next card is looked for
 const SAMPLE_MS = 120;
 const SAMPLE_W = 192;
-const MAX_REJECTS = 3;
 const DARK = 55; // average brightness below this gets a lighting tip
+const NEW_THING = 15; // how much the outline must change from the card-free scene before it is worth checking
+const SETTLE_MS = 1000; // how long a card-free scene must hold still before it becomes the reference
+const WARMUP_MS = 2500; // webcams open dark and brighten, so the first moments are ignored
+const CHECK_GAP_MS = 1500; // shortest pause between two automatic checks
+const MAX_MISSES = 6; // automatic checks that find no card before automatic capture pauses
 const TIP_MS = 700; // shortest time a tip stays on screen, so tips do not flicker
 
 // Shrink the photo in the browser so uploads stay small and fast.
@@ -99,7 +102,7 @@ export default function Home() {
   const [camera, setCamera] = useState<"spread" | "cards" | null>(null);
   const [videoRatio, setVideoRatio] = useState(16 / 9);
   const [shots, setShotsState] = useState<Shot[]>([]);
-  const [detect, setDetect] = useState<"searching" | "locking" | "done">("searching");
+  const [detect, setDetect] = useState<"searching" | "locking" | "checking" | "done">("searching");
   const [auto, setAuto] = useState(true);
   const [cameraNote, setCameraNote] = useState("");
   const [flash, setFlash] = useState(0);
@@ -124,9 +127,15 @@ export default function Home() {
   const live = useRef({
     shots: [] as Shot[],
     flyer: null as Flyer | null,
-    phase: "searching" as "searching" | "locking" | "cooldown",
+    phase: "searching" as "searching" | "locking" | "checking" | "cooldown",
     lastGray: null as Uint8ClampedArray | null,
-    rejects: 0,
+    // What the outline looks like with no card in it: the person, their room, the wall behind them.
+    empty: null as Uint8ClampedArray | null,
+    // What the outline looked like at the last capture, to tell when that card has been taken away.
+    shotGray: null as Uint8ClampedArray | null,
+    lastCheck: 0,
+    misses: 0,
+    check: (() => {}) as (quiet?: boolean) => void,
     nextId: 1,
     session: 0,
     total: 0,
@@ -178,7 +187,9 @@ export default function Home() {
     l.shots = [];
     l.flyer = null;
     l.phase = "searching";
-    l.rejects = 0;
+    l.empty = null;
+    l.shotGray = null;
+    l.misses = 0;
     setCamera(null);
     setShotsState([]);
     setFlyerState(null);
@@ -253,52 +264,101 @@ export default function Home() {
     if (ready) setStage("confirm");
   }
 
-  async function recognize(shot: Shot, index: number) {
-    const l = live.current;
-    const session = l.session;
-    let pick: Pick | null = null;
-    let seen = true;
+  // Ask the reader which card is in a photo. Resolves to null when it sees no tarot card.
+  async function readCard(photo: Photo, index: number): Promise<{ ok: boolean; pick: Pick | null }> {
     try {
       const res = await fetch("/api/identify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ images: [shot.photo.base64], offset: index, mediaType: "image/jpeg", spreadId: l.spreadId }),
+        body: JSON.stringify({
+          images: [photo.base64],
+          offset: index,
+          mediaType: "image/jpeg",
+          spreadId: live.current.spreadId,
+        }),
       });
       const data = await res.json();
-      if (res.ok) {
-        pick = data.cards?.[0] ?? null;
-        seen = pick !== null;
-      }
+      return { ok: res.ok, pick: res.ok ? (data.cards?.[0] ?? null) : null };
     } catch {
-      // Leave the slot unread. It can be fixed on the confirm screen.
+      return { ok: false, pick: null };
     }
-    if (l.session !== session || !l.shots.some((s) => s.id === shot.id)) return;
+  }
 
-    const isLast = l.shots[l.shots.length - 1].id === shot.id;
-    if (!seen && isLast) {
-      // Like a rejected check photo: drop it and ask again.
-      setShots(l.shots.slice(0, -1));
-      l.phase = "cooldown";
-      l.rejects++;
-      if (l.rejects >= MAX_REJECTS) {
+  // Put a captured card into the spread: flash, then fly it to its position.
+  function addShot(shot: Shot) {
+    const l = live.current;
+    const index = l.shots.length;
+    const from = document.querySelector(".camera-frame .guide-line")?.getBoundingClientRect();
+    const to = document.querySelector(`.camera-side [data-slot="${index}"]`)?.getBoundingClientRect();
+    setShots([...l.shots, shot]);
+    if (from && to && to.width > 0) setFlyer({ src: shot.thumb, from, to, index });
+    l.phase = "cooldown";
+    setFlash((n) => n + 1);
+    setDetect("done");
+    setCameraNote("");
+  }
+
+  // Automatic capture. Something new is sitting steady in the outline, so a frame is checked quietly.
+  // Nothing is captured unless the reader confirms it is a tarot card.
+  // `quiet` is the one check made as the camera opens, in case a card is already held up.
+  // It shows no progress ring, because most of the time it is only looking at the person.
+  async function check(quiet = false) {
+    const v = video.current;
+    const l = live.current;
+    const index = l.shots.length;
+    if (!v || !v.videoWidth || index >= l.total || l.phase === "checking") return;
+    const session = l.session;
+    const frame = l.lastGray;
+    const photo = toPhoto(v, v.videoWidth, v.videoHeight, CARD_EDGE);
+    const thumb = cropCard(v);
+    l.phase = "checking";
+    l.lastCheck = performance.now();
+    if (!quiet) setDetect("checking");
+
+    const { ok, pick } = await readCard(photo, index);
+    // Ignore the answer if the camera closed or the person captured by hand in the meantime.
+    if (l.session !== session || l.phase !== "checking" || l.shots.length !== index) return;
+
+    if (!pick) {
+      // No card in that frame. Remember the scene as card-free so it is not checked again.
+      l.empty = frame;
+      l.phase = "searching";
+      l.misses++;
+      setDetect("searching");
+      if (!ok) {
         setAuto(false);
-        setCameraNote("automatic capture is off. hold the card in the outline and press capture.");
-      } else {
-        setCameraNote(`that did not look like a tarot card. hold card ${index + 1} inside the outline again.`);
+        setCameraNote("the card reader could not be reached. hold the card in the outline and press capture.");
+      } else if (l.misses >= MAX_MISSES) {
+        setAuto(false);
+        setCameraNote("automatic capture is paused. hold the card in the outline and press capture.");
+      } else if (l.misses >= 3 && !quiet) {
+        setCameraNote("no card found yet. hold it flat and close enough to fill the outline.");
       }
-      setDetect("searching");
       return;
     }
-    // Every card in a deck is unique, so a repeat means the same card was captured twice.
-    const twin = pick ? l.shots.findIndex((s) => s.id !== shot.id && s.pick?.card === pick!.card) : -1;
-    if (twin >= 0 && isLast) {
-      setShots(l.shots.slice(0, -1));
+
+    // Every card in a deck is unique, so a repeat means the same card is still being held up.
+    const twin = l.shots.findIndex((s) => s.pick?.card === pick.card);
+    if (twin >= 0) {
+      l.shotGray = frame;
       l.phase = "cooldown";
+      setDetect("done");
       setCameraNote(`that is the same card as position ${twin + 1}. hold up card ${index + 1}.`);
-      setDetect("searching");
       return;
     }
-    if (pick) l.rejects = 0;
+
+    l.misses = 0;
+    l.shotGray = frame;
+    addShot({ id: l.nextId++, photo, thumb, status: "done", pick });
+    maybeFinish();
+  }
+
+  // Manual capture. The photo is always kept. An unread card can be chosen by hand on the next screen.
+  async function recognize(shot: Shot, index: number) {
+    const l = live.current;
+    const session = l.session;
+    const { pick } = await readCard(shot.photo, index);
+    if (l.session !== session || !l.shots.some((s) => s.id === shot.id)) return;
     setShots(l.shots.map((s) => (s.id === shot.id ? { ...s, status: pick ? "done" : "error", pick } : s)));
     maybeFinish();
   }
@@ -325,14 +385,8 @@ export default function Home() {
       status: "pending",
       pick: null,
     };
-    const from = document.querySelector(".camera-frame .guide-line")?.getBoundingClientRect();
-    const to = document.querySelector(`.camera-side [data-slot="${index}"]`)?.getBoundingClientRect();
-    setShots([...l.shots, shot]);
-    if (from && to && to.width > 0) setFlyer({ src: shot.thumb, from, to, index });
-    l.phase = "cooldown";
-    setFlash((n) => n + 1);
-    setDetect("done");
-    setCameraNote("");
+    l.shotGray = l.lastGray;
+    addShot(shot);
     recognize(shot, index);
   }
 
@@ -355,18 +409,27 @@ export default function Home() {
     l.slots = spread.slots;
     l.torch = torch;
     l.takeShot = takeShot;
+    l.check = check;
   });
 
-  // Watch the camera. Give live tips, mark which outlines hold a card, and capture without a tap
-  // once every outline is filled and the picture is steady.
+  // Watch the camera and capture without a click.
+  //
+  // Webcam (one card at a time): the watcher learns what the outline looks like with no card in it.
+  // When something new sits steady in the outline, one frame is sent to the reader. The card is
+  // captured only if the reader confirms a tarot card, so a face or a hand is never captured.
+  //
+  // Phone (whole spread): each outline is checked for a card's straight edges, with live tips,
+  // and the photo is taken once every outline is filled and the picture is steady.
   useEffect(() => {
     if (!camera) return;
     const l = live.current;
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+    let started = 0;
     let lockStart = 0;
     let misses = 0;
     let clearSince = 0;
+    let quietSince = 0;
     let shownTip = "";
     let tipAt = 0;
     let shownFilled = "";
@@ -377,10 +440,24 @@ export default function Home() {
       tipAt = now;
       setTip(next);
     };
+    const stopLocking = () => {
+      if (l.phase === "locking") {
+        l.phase = "searching";
+        setDetect("searching");
+      }
+    };
+    const darkTip = () =>
+      l.torch === "off"
+        ? "it is dark here. turn on the flash."
+        : l.torch === "on"
+          ? "still dark. move closer to a light."
+          : "it is dark here. move closer to a light.";
 
     const timer = setInterval(() => {
       const v = video.current;
       if (!v || !v.videoWidth) return;
+      const now = performance.now();
+      if (!started) started = now;
       const w = SAMPLE_W;
       const h = Math.round((SAMPLE_W * v.videoHeight) / v.videoWidth);
       if (canvas.width !== w || canvas.height !== h) {
@@ -390,20 +467,79 @@ export default function Home() {
       ctx.drawImage(v, 0, 0, w, h);
       const gray = toGray(ctx.getImageData(0, 0, w, h).data);
       const prev = l.lastGray && l.lastGray.length === gray.length ? l.lastGray : null;
-      const now = performance.now();
       l.lastGray = gray;
+      // Let the camera settle its exposure before judging anything.
+      if (now - started < WARMUP_MS) return;
+      const dark = brightness(gray) < DARK;
 
-      const oneCard = camera === "cards";
+      if (camera === "cards") {
+        const region = cardRegion(w, h);
+        const fits = (g: Uint8ClampedArray | null) => (g && g.length === gray.length ? g : null);
+        const still = prev ? regionDiff(gray, prev, w, h, region) < STILL : false;
+        // Until the first check comes back there is no card-free reference, so the scene counts as new.
+        const empty = fits(l.empty);
+        const first = !empty;
+        const change = empty ? regionDiff(gray, empty, w, h, region) : 255;
+        const shot = fits(l.shotGray);
+        const sinceShot = shot ? regionDiff(gray, shot, w, h, region) : 255;
+
+        // Keep the card-free reference fresh while the scene is steady and looks like it.
+        if (still && change < NEW_THING / 2 && l.phase === "searching") {
+          if (!quietSince) quietSince = now;
+          if (now - quietSince > SETTLE_MS) {
+            l.empty = gray;
+            quietSince = now;
+          }
+        } else {
+          quietSince = 0;
+        }
+
+        const somethingNew = change > NEW_THING && sinceShot > NEW_THING;
+        showTip(dark ? darkTip() : somethingNew && !still && l.phase === "searching" ? "hold steady." : "", now);
+
+        if (!l.auto || l.shots.length >= l.total) return stopLocking();
+        if (l.phase === "checking") return;
+        if (l.phase === "cooldown") {
+          // Wait until the captured card has been taken away or swapped for another.
+          if (sinceShot > NEW_THING) {
+            if (!clearSince) clearSince = now;
+            if (now - clearSince > 400) {
+              // The card has left. The next one only has to differ from the card-free scene.
+              l.phase = "searching";
+              l.shotGray = null;
+              clearSince = 0;
+              setDetect("searching");
+            }
+          } else {
+            clearSince = 0;
+          }
+          return;
+        }
+        if (somethingNew && still && !dark && now - l.lastCheck > CHECK_GAP_MS) {
+          misses = 0;
+          if (l.phase !== "locking") {
+            l.phase = "locking";
+            lockStart = now;
+            if (!first) setDetect("locking");
+          } else if (now - lockStart >= HOLD_MS) {
+            l.check(first);
+          }
+        } else if (l.phase === "locking" && ++misses > 2) {
+          stopLocking();
+        }
+        return;
+      }
+
+      // Whole spread on a table.
       // Overlapping outlines (the celtic cross) hide each other's edges, so those spreads get tips only.
-      const traceable = oneCard || !l.slots.some((s) => s.sideways);
-      const regions = oneCard ? [cardRegion(w, h)] : slotRegions(l.slots, w, h);
+      const traceable = !l.slots.some((s) => s.sideways);
+      const regions = slotRegions(l.slots, w, h);
       const results = regions.map((r) => analyze(gray, prev, w, h, r));
       const inPlace = results.filter((r) => r.aligned).length;
       const allIn = traceable && inPlace === regions.length;
       const still = Math.max(...results.map((r) => r.motion)) < STILL;
-      const dark = brightness(gray) < DARK;
 
-      if (!oneCard && traceable) {
+      if (traceable) {
         const key = results.map((r) => (r.aligned ? 1 : 0)).join("");
         if (key !== shownFilled) {
           shownFilled = key;
@@ -411,51 +547,14 @@ export default function Home() {
         }
       }
 
-      // One tip at a time, most useful first.
       let next = "";
-      if (dark) {
-        next =
-          l.torch === "off"
-            ? "it is dark here. turn on the flash."
-            : l.torch === "on"
-              ? "still dark. move closer to a light."
-              : "it is dark here. move closer to a light.";
-      } else if (!traceable) {
-        next = still ? "" : "hold steady.";
-      } else if (allIn) {
-        next = still ? "" : "hold steady.";
-      } else if (oneCard) {
-        next = results[0].sides >= 1 ? "almost. line the card's edges up with the outline." : "";
-      } else if (inPlace > 0) {
+      if (dark) next = darkTip();
+      else if (!traceable || allIn) next = still ? "" : "hold steady.";
+      else if (inPlace > 0)
         next = `${inPlace} of ${regions.length} cards are in place. move until every card sits in its outline.`;
-      }
       showTip(next, now);
 
-      const armed = l.auto && traceable && (!oneCard || l.shots.length < l.total);
-      if (!armed) {
-        if (l.phase === "locking") {
-          l.phase = "searching";
-          setDetect("searching");
-        }
-        return;
-      }
-
-      if (l.phase === "cooldown") {
-        // Wait for the captured card to leave the outline before looking for the next one.
-        // The outline has to stay empty for a moment, so a card that only wobbles is not captured twice.
-        if (!allIn) {
-          if (!clearSince) clearSince = now;
-          if (now - clearSince > CLEAR_MS) {
-            l.phase = "searching";
-            clearSince = 0;
-            setDetect("searching");
-          }
-        } else {
-          clearSince = 0;
-        }
-        return;
-      }
-
+      if (!l.auto || !traceable) return stopLocking();
       if (allIn && still && !dark) {
         misses = 0;
         if (l.phase !== "locking") {
@@ -466,13 +565,19 @@ export default function Home() {
           l.takeShot();
         }
       } else if (l.phase === "locking" && ++misses > 2) {
-        l.phase = "searching";
-        setDetect("searching");
+        stopLocking();
       }
     }, SAMPLE_MS);
 
     return () => clearInterval(timer);
   }, [camera]);
+
+  // Camera notes are advice for the moment. They fade so they never sit over the next attempt.
+  useEffect(() => {
+    if (!cameraNote) return;
+    const t = setTimeout(() => setCameraNote(""), 6000);
+    return () => clearTimeout(t);
+  }, [cameraNote]);
 
   // Fly the captured card from the camera outline to its place in the spread map.
   useLayoutEffect(() => {
@@ -687,12 +792,14 @@ export default function Home() {
         hold it inside the outline, the same way up as it sits on the table.
       </>
     );
-  const cameraHint = cameraNote ? (
-    cameraNote
-  ) : finishing ? (
+  const cameraHint = finishing ? (
     <span className="dots">reading your cards</span>
+  ) : detect === "checking" ? (
+    <strong className="dots">checking the card</strong>
   ) : holding ? (
-    <strong>hold still. capturing.</strong>
+    <strong>hold still.</strong>
+  ) : cameraNote ? (
+    cameraNote
   ) : camera === "cards" && detect === "done" && done > 0 ? (
     <>
       <strong>got it.</strong> take that card away, then hold up card {done + 1}: {position.name}.
@@ -941,9 +1048,13 @@ export default function Home() {
                   }}
                 />
                 {camera === "cards" ? (
-                  !finishing && <Guide slots={ONE_SLOT} firstNumber={done + 1} state={detect} />
+                  !finishing && <Guide slots={ONE_SLOT} state={detect} numbers={false} />
                 ) : (
-                  <Guide slots={spread.slots} state={traceable && auto ? detect : undefined} filled={filled} />
+                  <Guide
+                    slots={spread.slots}
+                    state={traceable && auto && detect !== "checking" ? detect : undefined}
+                    filled={filled}
+                  />
                 )}
                 {flash > 0 && <div key={flash} className="flash" />}
                 <div className="camera-tools">
