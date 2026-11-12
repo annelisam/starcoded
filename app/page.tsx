@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CARDS, getCard } from "@/lib/cards";
-import { SPREADS } from "@/lib/spreads";
+import { SPREADS, type Spread } from "@/lib/spreads";
 
 type Stage = "ask" | "identifying" | "confirm" | "reading";
 type Pick = { card: string; reversed: boolean; lowConfidence?: boolean };
@@ -37,6 +37,38 @@ function fileToPhoto(file: File): Promise<Photo> {
   });
 }
 
+const CARD_W = 10;
+const CARD_H = 17;
+
+// Numbered card outlines drawn over the live camera so the spread is laid out in the right order.
+function SpreadGuide({ spread }: { spread: Spread }) {
+  const pad = 3;
+  const boxes = spread.slots.map((s) => {
+    const cx = s.x + CARD_W / 2;
+    const cy = s.y + CARD_H / 2;
+    const w = s.sideways ? CARD_H : CARD_W;
+    const h = s.sideways ? CARD_W : CARD_H;
+    return { cx, cy, w, h, lx: cx + (s.lx ?? 0), ly: cy + (s.ly ?? 0) };
+  });
+  const minX = Math.min(...boxes.map((b) => b.cx - b.w / 2)) - pad;
+  const minY = Math.min(...boxes.map((b) => b.cy - b.h / 2)) - pad;
+  const maxX = Math.max(...boxes.map((b) => b.cx + b.w / 2)) + pad;
+  const maxY = Math.max(...boxes.map((b) => b.cy + b.h / 2)) + pad;
+  return (
+    <svg className="guide" viewBox={`${minX} ${minY} ${maxX - minX} ${maxY - minY}`} aria-hidden="true">
+      {boxes.map((b, i) => (
+        <g key={i}>
+          <rect className="guide-shadow" x={b.cx - b.w / 2} y={b.cy - b.h / 2} width={b.w} height={b.h} rx={0.8} />
+          <rect className="guide-line" x={b.cx - b.w / 2} y={b.cy - b.h / 2} width={b.w} height={b.h} rx={0.8} />
+          <text className="guide-number" x={b.lx} y={b.ly} textAnchor="middle" dominantBaseline="central">
+            {i + 1}
+          </text>
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 export default function Home() {
   const [stage, setStage] = useState<Stage>("ask");
   const [question, setQuestion] = useState("");
@@ -48,6 +80,7 @@ export default function Home() {
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState("");
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [videoRatio, setVideoRatio] = useState(16 / 9);
 
   const fileInput = useRef<HTMLInputElement>(null);
   const video = useRef<HTMLVideoElement>(null);
@@ -350,7 +383,24 @@ export default function Home() {
 
       {cameraOpen && (
         <div className="camera" role="dialog" aria-modal="true" aria-label="camera">
-          <video ref={video} autoPlay playsInline muted />
+          <div className="camera-stage">
+            <div className="camera-frame" style={{ "--ar": videoRatio } as React.CSSProperties}>
+              <video
+                ref={video}
+                autoPlay
+                playsInline
+                muted
+                onLoadedMetadata={(e) => {
+                  const v = e.currentTarget;
+                  if (v.videoWidth && v.videoHeight) setVideoRatio(v.videoWidth / v.videoHeight);
+                }}
+              />
+              <SpreadGuide spread={spread} />
+            </div>
+          </div>
+          <p className="camera-hint">
+            {spread.slots.length === 1 ? "fit your card inside the outline." : "place each card inside its numbered outline."}
+          </p>
           <div className="camera-actions">
             <button className="ghost" onClick={closeCamera}>
               cancel

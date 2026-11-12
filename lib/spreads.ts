@@ -3,6 +3,9 @@ export type Spread = {
   name: string;
   layout: string;
   positions: { name: string; meaning: string }[];
+  // Camera guide. One slot per position, in a grid where a card is 10 wide and 17 tall.
+  // x and y are the top-left corner of an upright card. lx and ly move the number label.
+  slots: { x: number; y: number; sideways?: boolean; lx?: number; ly?: number }[];
 };
 
 export const SPREADS: Spread[] = [
@@ -11,6 +14,7 @@ export const SPREADS: Spread[] = [
     name: "one card",
     layout: "a single card",
     positions: [{ name: "the card", meaning: "the core message for this question" }],
+    slots: [{ x: 0, y: 0 }],
   },
   {
     id: "past-present-future",
@@ -21,6 +25,7 @@ export const SPREADS: Spread[] = [
       { name: "present", meaning: "where things stand now" },
       { name: "future", meaning: "where this is heading on its current course" },
     ],
+    slots: [{ x: 0, y: 0 }, { x: 12, y: 0 }, { x: 24, y: 0 }],
   },
   {
     id: "situation-action-outcome",
@@ -31,6 +36,7 @@ export const SPREADS: Spread[] = [
       { name: "action", meaning: "what to do about it" },
       { name: "outcome", meaning: "the likely result of taking that action" },
     ],
+    slots: [{ x: 0, y: 0 }, { x: 12, y: 0 }, { x: 24, y: 0 }],
   },
   {
     id: "five-card-cross",
@@ -44,6 +50,7 @@ export const SPREADS: Spread[] = [
       { name: "conscious", meaning: "what is known and aimed for" },
       { name: "unconscious", meaning: "what is driving things underneath" },
     ],
+    slots: [{ x: 12, y: 19 }, { x: 0, y: 19 }, { x: 24, y: 19 }, { x: 12, y: 0 }, { x: 12, y: 38 }],
   },
   {
     id: "celtic-cross",
@@ -61,6 +68,18 @@ export const SPREADS: Spread[] = [
       { name: "environment", meaning: "other people and outside forces" },
       { name: "hopes and fears", meaning: "what is wished for and dreaded" },
       { name: "outcome", meaning: "where this resolves on its current course" },
+    ],
+    slots: [
+      { x: 16, y: 28.5, ly: -5.5 },
+      { x: 16, y: 28.5, sideways: true, lx: 6 },
+      { x: 16, y: 47.5 },
+      { x: 0, y: 28.5 },
+      { x: 16, y: 9.5 },
+      { x: 32, y: 28.5 },
+      { x: 48, y: 57 },
+      { x: 48, y: 38 },
+      { x: 48, y: 19 },
+      { x: 48, y: 0 },
     ],
   },
 ];

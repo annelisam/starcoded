@@ -377,12 +377,68 @@ textarea {
   background: var(--paper);
 }
 
-.camera video {
+.camera-stage {
   flex: 1;
   min-height: 0;
-  width: 100%;
-  object-fit: contain;
+  display: grid;
+  place-items: center;
   background: #000;
+  container-type: size;
+}
+
+.camera-frame {
+  position: relative;
+  width: min(100cqw, calc(100cqh * var(--ar)));
+  aspect-ratio: var(--ar);
+}
+
+.camera-frame video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.guide {
+  position: absolute;
+  inset: 4%;
+  width: 92%;
+  height: 92%;
+  pointer-events: none;
+}
+
+.guide-shadow,
+.guide-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+}
+
+.guide-shadow {
+  stroke: rgba(0, 0, 0, 0.55);
+  stroke-width: 5px;
+}
+
+.guide-line {
+  stroke: #fff;
+  stroke-width: 2px;
+  stroke-dasharray: 8 6;
+}
+
+.guide-number {
+  fill: #fff;
+  stroke: rgba(0, 0, 0, 0.6);
+  stroke-width: 0.6px;
+  paint-order: stroke;
+  font-family: var(--sans);
+  font-weight: 600;
+  font-size: 3.5px;
+}
+
+.camera-hint {
+  margin: 0;
+  padding: 0.9rem 1.5rem 0;
+  text-align: center;
+  font-size: 0.9375rem;
 }
 
 .camera-actions {
