@@ -1,6 +1,6 @@
 import { SUIT_THEMES, getCard } from "@/lib/cards";
 import { getSpread } from "@/lib/spreads";
-import { MODEL, getClient, missingKey } from "@/lib/claude";
+import { getClaude, missingKey } from "@/lib/claude";
 
 export const maxDuration = 120;
 
@@ -26,8 +26,9 @@ Keep it under 120 words for one card, under 280 for three cards, under 450 for f
 type Pick = { card?: string; reversed?: boolean };
 
 export async function POST(request: Request) {
-  const client = getClient();
-  if (!client) return missingKey();
+  const claude = await getClaude();
+  if (!claude) return missingKey();
+  const { client, model } = claude;
 
   let body: { question?: string; spreadId?: string; cards?: Pick[] };
   try {
@@ -68,7 +69,7 @@ export async function POST(request: Request) {
     async start(controller) {
       try {
         const run = client.messages.stream({
-          model: MODEL,
+          model,
           max_tokens: 1800,
           system: SYSTEM,
           messages: [{ role: "user", content: user }],

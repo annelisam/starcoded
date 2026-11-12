@@ -1,7 +1,7 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { CARDS, CARD_IDS, getCard } from "@/lib/cards";
 import { getSpread } from "@/lib/spreads";
-import { MODEL, getClient, missingKey } from "@/lib/claude";
+import { getClaude, missingKey } from "@/lib/claude";
 
 export const maxDuration = 60;
 
@@ -11,8 +11,9 @@ type MediaType = (typeof MEDIA_TYPES)[number];
 const MAX_IMAGE_CHARS = 5_500_000; // about 4 MB of image, under Vercel's request body limit
 
 export async function POST(request: Request) {
-  const client = getClient();
-  if (!client) return missingKey();
+  const claude = await getClaude();
+  if (!claude) return missingKey();
+  const { client, model } = claude;
 
   let body: { image?: string; mediaType?: string; spreadId?: string };
   try {
@@ -52,7 +53,7 @@ Valid card ids: ${cardList}`;
   let response: Anthropic.Message;
   try {
     response = await client.messages.create({
-      model: MODEL,
+      model,
       max_tokens: 1500,
       messages: [
         {
