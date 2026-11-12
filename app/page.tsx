@@ -7,6 +7,7 @@ import { SPREADS, getSpread } from "@/lib/spreads";
 import { STILL, analyze, brightness, cardRegion, regionDiff, slotRegions, toGray } from "@/lib/detect";
 import { Guide, ONE_SLOT, SpreadMap } from "./spread-art";
 import { Learn } from "./learn";
+import { Deck } from "./deck";
 
 type Stage = "ask" | "identifying" | "confirm" | "reading";
 type Pick = { card: string; reversed: boolean; lowConfidence?: boolean };
@@ -816,6 +817,11 @@ export default function Home() {
     <div className="shell">
       <header className="top">
         <span className="wordmark">starcoded</span>
+        {stage === "ask" && (
+          <a className="link" href="#learn">
+            learn the deck
+          </a>
+        )}
         {stage !== "ask" && stage !== "identifying" && (
           <button className="link" onClick={reset}>
             new reading
@@ -931,6 +937,8 @@ export default function Home() {
           </form>
         )}
 
+        {stage === "ask" && <Deck />}
+
         {stage === "confirm" && (
           <section className="confirm stage">
             <h1 className="display">check the cards before i read them.</h1>
@@ -1000,7 +1008,7 @@ export default function Home() {
                     index={i}
                     card={card}
                     reversed={p.reversed}
-                    position={spread.positions[i].name}
+                    label={spread.positions[i].name}
                     thumb={capture?.thumbs?.[i]}
                   />
                 ) : null;

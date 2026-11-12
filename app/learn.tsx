@@ -1,3 +1,6 @@
+"use client";
+
+import { useState } from "react";
 import type { Card } from "@/lib/cards";
 import { getLore } from "@/lib/lore";
 
@@ -5,26 +8,35 @@ import { getLore } from "@/lib/lore";
 // The column that matches how the card was drawn is emphasized.
 export function Learn({
   card,
-  reversed,
-  position,
+  reversed = false,
+  label,
   thumb,
-  index,
+  index = 0,
+  startOpen = false,
 }: {
   card: Card;
-  reversed: boolean;
-  position: string;
+  reversed?: boolean;
+  label: string;
   thumb?: string;
-  index: number;
+  index?: number;
+  startOpen?: boolean;
 }) {
+  // The notes are only built once a card is opened, which keeps the full deck list light.
+  const [open, setOpen] = useState(startOpen);
   const lore = getLore(card);
   const rows = [
     { label: "keywords", upright: card.upright.join(", "), reversed: card.reversed.join(", ") },
     ...lore.areas,
   ];
   return (
-    <details className="learn" style={{ "--i": index } as React.CSSProperties}>
+    <details
+      className="learn"
+      style={{ "--i": Math.min(index, 8) } as React.CSSProperties}
+      open={open}
+      onToggle={(e) => setOpen(e.currentTarget.open)}
+    >
       <summary>
-        <span className="quiet">{position}</span>
+        <span className="quiet">{label}</span>
         <span className="learn-name">
           {card.name}
           {reversed && <em> reversed</em>}
@@ -32,6 +44,7 @@ export function Learn({
         <span className="learn-mark" aria-hidden="true" />
       </summary>
 
+      {open && (
       <div className="learn-body">
         <div className="learn-top">
           {thumb && (
@@ -97,6 +110,7 @@ export function Learn({
           </tbody>
         </table>
       </div>
+      )}
     </details>
   );
 }

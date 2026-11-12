@@ -1070,3 +1070,157 @@ div.drawn {
     grid-template-columns: 5rem minmax(0, 1fr);
   }
 }
+
+/* Learn the deck, on the home page */
+
+html {
+  scroll-behavior: smooth;
+}
+
+.deck {
+  margin-top: 7rem;
+  padding-top: 4rem;
+  border-top: 1px solid var(--ink);
+  scroll-margin-top: 1rem;
+}
+
+.deck-block {
+  margin-top: 3rem;
+}
+
+.deck-block > h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip {
+  padding: 0.4rem 0.85rem;
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--ink);
+}
+
+.chip[aria-pressed="true"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.practice-intro {
+  margin: 0 0 1rem;
+}
+
+.practice > .quiet {
+  margin: 0;
+}
+
+.practice-card {
+  margin: 0.25rem 0 1.25rem;
+  font-family: var(--serif);
+  font-weight: 350;
+  font-size: clamp(2.25rem, 9vw, 3.25rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+}
+
+.options {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.option {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.option:hover:enabled {
+  border-color: var(--ink);
+}
+
+.option:disabled {
+  cursor: default;
+}
+
+.option[data-state="right"] {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.option[data-state="wrong"] {
+  border-color: var(--alarm);
+  color: var(--alarm);
+}
+
+.option[data-state="other"] {
+  color: var(--fog);
+}
+
+.option-tag {
+  flex: none;
+  font-size: 0.875rem;
+}
+
+.practice-foot {
+  margin-top: 1.25rem;
+}
+
+.practice-answer {
+  margin: 0 0 1rem;
+  animation: rise 0.3s ease-out;
+}
+
+.practice-foot .primary {
+  margin-top: 0;
+}
+
+.streak {
+  margin: 1rem 0 0;
+  font-size: 0.9375rem;
+}
+
+.search {
+  display: block;
+  width: 100%;
+  padding: 0.6rem 0;
+  border: 0;
+  border-bottom: 1px solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+  appearance: none;
+}
+
+.search::placeholder {
+  color: var(--fog);
+  opacity: 1;
+}
+
+.search:focus {
+  outline: none;
+  border-bottom-width: 2px;
+}
+
+.count {
+  margin: 0.75rem 0 0.5rem;
+  font-size: 0.9375rem;
+}
