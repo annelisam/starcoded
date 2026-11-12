@@ -448,3 +448,54 @@ textarea {
 .camera-actions .primary {
   margin-top: 0;
 }
+
+/* Desktop capture options */
+
+.photo-actions.three {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+@media (max-width: 34rem) {
+  .photo-actions.three {
+    grid-template-columns: 1fr;
+  }
+}
+
+.thumbs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: 0.5rem;
+}
+
+.photo .thumbs img {
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  max-height: none;
+}
+
+.handoff {
+  display: grid;
+  grid-template-columns: 11rem 1fr;
+  gap: 1.5rem;
+  align-items: center;
+}
+
+.handoff img {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--rule);
+}
+
+.handoff p {
+  margin: 0 0 0.5rem;
+}
+
+@media (max-width: 34rem) {
+  .handoff {
+    grid-template-columns: 1fr;
+  }
+
+  .handoff img {
+    max-width: 14rem;
+  }
+}

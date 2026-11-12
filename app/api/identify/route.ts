@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   if (!claude) return missingKey();
   const { client, model } = claude;
 
-  let body: { image?: string; mediaType?: string; spreadId?: string };
+  let body: { image?: string; images?: string[]; mediaType?: string; spreadId?: string };
   try {
     body = await request.json();
   } catch {
@@ -24,17 +24,34 @@ export async function POST(request: Request) {
 
   const spread = getSpread(body.spreadId ?? "");
   if (!spread) return Response.json({ error: "Unknown spread." }, { status: 400 });
-  if (!body.image || body.image.length > MAX_IMAGE_CHARS) {
+
+  // Two capture modes: one photo of the whole spread, or one photo per card in position order.
+  const perCard = Array.isArray(body.images);
+  const images = (perCard ? body.images! : [body.image]).filter((i): i is string => typeof i === "string" && i.length > 0);
+  const totalChars = images.reduce((n, i) => n + i.length, 0);
+  if (images.length === 0 || images.length > spread.positions.length || totalChars > MAX_IMAGE_CHARS) {
     return Response.json({ error: "The photo is missing or too large." }, { status: 400 });
   }
   if (!MEDIA_TYPES.includes(body.mediaType as MediaType)) {
     return Response.json({ error: "The photo must be a JPEG, PNG, or WebP." }, { status: 400 });
   }
+  const mediaType = body.mediaType as MediaType;
 
   const positions = spread.positions.map((p, i) => `${i + 1}. ${p.name}`).join("\n");
   const cardList = CARDS.map((c) => `${c.id} (${c.name})`).join(", ");
 
-  const prompt = `This photo shows a tarot spread. The reader says it is the "${spread.name}" spread: ${spread.layout}.
+  const scene = perCard
+    ? `These ${images.length} photos each show one tarot card held up to a webcam. They are in position order for the "${spread.name}" spread, so photo 1 is position 1.
+
+Positions, in order:
+${positions}
+
+Identify the card in each photo. Use the card's title text if it is legible, and the artwork if it is not. A card is reversed when its artwork and title appear upside down in the photo. Ignore the person, their hands, and the background.
+
+Rules:
+- Return exactly one entry per photo, in order, numbered from 1.
+- If a photo shows no tarot card, make your best guess, set confidence to "low", and explain in "notes".`
+    : `This photo shows a tarot spread. The reader says it is the "${spread.name}" spread: ${spread.layout}.
 
 Positions, in order:
 ${positions}
@@ -44,29 +61,27 @@ Identify the card in each position. Use the card's title text if it is legible, 
 Rules:
 - Return one entry per card you can actually see, in position order, numbered from 1.
 - If the photo shows fewer or more cards than the spread has positions, return the cards you see in reading order and explain in "notes".
+- If the photo has no tarot cards, return an empty list and say so in "notes".`;
+
+  const prompt = `${scene}
 - Set confidence to "low" for any card you are guessing at because of glare, blur, cropping, or an unfamiliar deck.
-- If the photo has no tarot cards, return an empty list and say so in "notes".
 - Keep "notes" to one short sentence, or an empty string when everything is clear.
 
 Valid card ids: ${cardList}`;
+
+  const content: Anthropic.ContentBlockParam[] = [];
+  images.forEach((data, i) => {
+    if (perCard) content.push({ type: "text", text: `Photo ${i + 1}, position ${i + 1} (${spread.positions[i].name}):` });
+    content.push({ type: "image", source: { type: "base64", media_type: mediaType, data } });
+  });
+  content.push({ type: "text", text: prompt });
 
   let response: Anthropic.Message;
   try {
     response = await client.messages.create({
       model,
       max_tokens: 1500,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "image",
-              source: { type: "base64", media_type: body.mediaType as MediaType, data: body.image },
-            },
-            { type: "text", text: prompt },
-          ],
-        },
-      ],
+      messages: [{ role: "user", content }],
       output_config: {
         format: {
           type: "json_schema",
