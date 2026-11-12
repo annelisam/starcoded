@@ -1,5 +1,6 @@
 import { SUIT_THEMES, getCard, verdict } from "@/lib/cards";
 import { getSpread } from "@/lib/spreads";
+import { getLore } from "@/lib/lore";
 import { getClaude, missingKey } from "@/lib/claude";
 
 export const maxDuration = 120;
@@ -10,6 +11,7 @@ Voice: direct, specific, and unsentimental, like a perceptive friend who reads c
 
 Method:
 - Ground every claim in the card data you are given: the card's meaning for its orientation, its keywords, its suit, and the role of its position in the spread. Do not invent meanings that contradict the data.
+- When the question is about love, work, or money, lean on the card's note for that area.
 - Read each card through the position it sits in and through the question. A card in "past" describes what led here. A card in "action" is advice.
 - Look across the spread: repeated suits, many major arcana, many reversals, cards that answer or contradict each other. Name the pattern when there is one.
 - Answer the question that was asked. If the cards point somewhere uncomfortable, say so plainly and kindly.
@@ -70,6 +72,7 @@ export async function POST(request: Request) {
         `Type: ${card.arcana === "major" ? "major arcana" : `${card.suit}, ${SUIT_THEMES[card.suit!]}`}`,
         `Keywords: ${(reversed ? card.reversed : card.upright).join(", ")}`,
         `Meaning: ${reversed ? card.reversedMeaning : card.meaning}`,
+        ...getLore(card).areas.map((a) => `In ${a.label}: ${reversed ? a.reversed : a.upright}`),
       ].join("\n"),
     );
   }

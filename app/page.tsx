@@ -6,6 +6,7 @@ import { CARDS, getCard, verdict } from "@/lib/cards";
 import { SPREADS, getSpread } from "@/lib/spreads";
 import { STILL, analyze, brightness, cardRegion, regionDiff, slotRegions, toGray } from "@/lib/detect";
 import { Guide, ONE_SLOT, SpreadMap } from "./spread-art";
+import { Learn } from "./learn";
 
 type Stage = "ask" | "identifying" | "confirm" | "reading";
 type Pick = { card: string; reversed: boolean; lowConfidence?: boolean };
@@ -990,17 +991,22 @@ export default function Home() {
                 <SpreadMap slots={spread.slots} thumbs={capture.thumbs} reveal />
               </div>
             )}
-            <ol className="drawn">
-              {picks.map((p, i) => (
-                <li key={i} style={{ "--i": i } as React.CSSProperties}>
-                  <span className="quiet">{spread.positions[i].name}</span>
-                  <span>
-                    {getCard(p.card)?.name}
-                    {p.reversed && <em> reversed</em>}
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <div className="drawn">
+              {picks.map((p, i) => {
+                const card = getCard(p.card);
+                return card ? (
+                  <Learn
+                    key={i}
+                    index={i}
+                    card={card}
+                    reversed={p.reversed}
+                    position={spread.positions[i].name}
+                    thumb={capture?.thumbs?.[i]}
+                  />
+                ) : null;
+              })}
+              <p className="quiet hint">open a card to learn its symbols, astrology, and meanings.</p>
+            </div>
             <div className="prose" aria-live="polite" aria-busy={streaming}>
               {readingText ? (
                 readingText.split(/\n{2,}/).map((para, i) => <p key={i}>{para}</p>)
