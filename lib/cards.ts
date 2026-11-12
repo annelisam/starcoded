@@ -144,3 +144,29 @@ export const SUIT_THEMES: Record<Suit, string> = {
   swords: "air: thought, communication, conflict, truth",
   pentacles: "earth: work, money, body, the material world",
 };
+
+// Yes or no pulls. Each card leans one way when upright. Cards not listed here lean yes.
+export type Verdict = "yes" | "no" | "maybe";
+
+const LEANS_NO = new Set([
+  "death", "the-devil", "the-tower",
+  "five-of-wands", "ten-of-wands",
+  "four-of-cups", "five-of-cups", "eight-of-cups",
+  "three-of-swords", "five-of-swords", "seven-of-swords", "eight-of-swords", "nine-of-swords", "ten-of-swords",
+  "five-of-pentacles",
+]);
+
+const LEANS_MAYBE = new Set([
+  "the-high-priestess", "the-hierophant", "the-hermit", "justice", "the-hanged-man", "the-moon",
+  "two-of-wands", "seven-of-wands", "nine-of-wands",
+  "seven-of-cups",
+  "two-of-swords", "four-of-swords", "six-of-swords", "page-of-swords", "knight-of-swords", "queen-of-swords", "king-of-swords",
+  "two-of-pentacles", "four-of-pentacles", "seven-of-pentacles",
+]);
+
+// A reversal turns a yes into a no, softens a no into a maybe, and leaves a maybe where it is.
+export function verdict(id: string, reversed: boolean): Verdict {
+  const upright: Verdict = LEANS_NO.has(id) ? "no" : LEANS_MAYBE.has(id) ? "maybe" : "yes";
+  if (!reversed) return upright;
+  return upright === "yes" ? "no" : "maybe";
+}

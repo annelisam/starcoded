@@ -870,3 +870,15 @@ textarea {
   display: block;
   margin: 1.25rem auto 0;
 }
+
+/* Yes or no pull */
+
+.verdict {
+  margin: -0.5rem 0 2rem;
+  font-family: var(--serif);
+  font-weight: 350;
+  font-size: clamp(5rem, 28vw, 11rem);
+  line-height: 0.9;
+  letter-spacing: -0.04em;
+  animation: rise 0.6s ease-out 0.2s backwards;
+}

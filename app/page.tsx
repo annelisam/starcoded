@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import QRCode from "qrcode";
-import { CARDS, getCard } from "@/lib/cards";
+import { CARDS, getCard, verdict } from "@/lib/cards";
 import { SPREADS, getSpread } from "@/lib/spreads";
 import { STILL, analyze, brightness, cardRegion, slotRegions, toGray } from "@/lib/detect";
 import { Guide, ONE_SLOT, SpreadMap } from "./spread-art";
@@ -64,16 +64,14 @@ function fileToPhoto(file: File): Promise<Photo> {
 }
 
 // A device with a mouse or trackpad is treated as a desktop: its camera faces the person, not the table.
+// The answer is read once per page load, so the capture options never switch in the middle of a session.
 const FINE_POINTER = "(hover: hover) and (pointer: fine)";
-function subscribePointer(onChange: () => void) {
-  const mq = window.matchMedia(FINE_POINTER);
-  mq.addEventListener("change", onChange);
-  return () => mq.removeEventListener("change", onChange);
-}
+let desktop: boolean | null = null;
+const noSubscription = () => () => {};
 function useIsDesktop() {
   return useSyncExternalStore(
-    subscribePointer,
-    () => window.matchMedia(FINE_POINTER).matches,
+    noSubscription,
+    () => (desktop ??= window.matchMedia(FINE_POINTER).matches),
     () => false,
   );
 }
@@ -88,7 +86,7 @@ export default function Home() {
 
   const [stage, setStage] = useState<Stage>("ask");
   const [question, setQuestion] = useState("");
-  const [spreadId, setSpreadId] = useState(SPREADS[1].id);
+  const [spreadId, setSpreadId] = useState("past-present-future");
   const [capture, setCapture] = useState<Capture | null>(null);
   const [picks, setPicks] = useState<Pick[]>([]);
   const [notes, setNotes] = useState("");
@@ -117,6 +115,10 @@ export default function Home() {
   const video = useRef<HTMLVideoElement>(null);
   const flyerEl = useRef<HTMLImageElement>(null);
   const mediaStream = useRef<MediaStream | null>(null);
+  // Each photo check or reading gets a number. Starting over raises it, so a late answer
+  // from an earlier reading can never overwrite the current one.
+  const run = useRef(0);
+  const stream = useRef<AbortController | null>(null);
 
   // The detection loop and async callbacks read the latest values from here.
   const live = useRef({
@@ -138,6 +140,12 @@ export default function Home() {
 
   const spread = SPREADS.find((s) => s.id === spreadId)!;
   const total = spread.positions.length;
+  const yesNo = spread.id === "yes-no";
+  // The reader can withhold the one-word verdict for questions where it would do harm.
+  // It signals that with a leading [no-verdict] marker, which is stripped before display.
+  const readingText = reading.replace(/^\[[^\]]*\]?\s*/, "");
+  const answer =
+    yesNo && picks[0]?.card && reading && !reading.startsWith("[") ? verdict(picks[0].card, picks[0].reversed) : null;
 
   const setShots = (next: Shot[]) => {
     live.current.shots = next;
@@ -179,6 +187,7 @@ export default function Home() {
     setFilled([]);
     setTip("");
     setTorch("none");
+    setFlash(0);
   }, []);
 
   useEffect(() => closeCamera, [closeCamera]);
@@ -299,6 +308,7 @@ export default function Home() {
     if (!v || !v.videoWidth) return;
     if (camera === "spread") {
       const cap: Capture = { mode: "spread", photos: [toPhoto(v, v.videoWidth, v.videoHeight, SPREAD_EDGE)] };
+      live.current.auto = false; // the camera is closing, so the watcher must not fire again
       setCapture(cap);
       closeCamera();
       // With a question already typed, go straight to reading the photo.
@@ -524,6 +534,7 @@ export default function Home() {
       setStage("confirm");
       return;
     }
+    const mine = ++run.current;
     setStage("identifying");
     try {
       const images = capture.photos.map((p) => p.base64);
@@ -537,6 +548,7 @@ export default function Home() {
         }),
       });
       const data = await res.json();
+      if (run.current !== mine) return;
       if (!res.ok) throw new Error(data.error);
       const found: (Pick | null)[] = data.cards;
       const seen = found.filter(Boolean).length;
@@ -550,12 +562,17 @@ export default function Home() {
       );
       setStage("confirm");
     } catch (err) {
+      if (run.current !== mine) return;
       setError(err instanceof Error && err.message ? err.message : "The photo could not be read. Try again.");
       setStage("ask");
     }
   }
 
   async function interpret() {
+    const mine = ++run.current;
+    stream.current?.abort();
+    const controller = new AbortController();
+    stream.current = controller;
     setError("");
     setReading("");
     setCopied(false);
@@ -566,6 +583,7 @@ export default function Home() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question, spreadId, cards: picks.map(({ card, reversed }) => ({ card, reversed })) }),
+        signal: controller.signal,
       });
       if (!res.ok || !res.body) {
         const data = await res.json().catch(() => ({}));
@@ -576,29 +594,42 @@ export default function Home() {
       let text = "";
       for (;;) {
         const { done, value } = await reader.read();
+        if (run.current !== mine) return;
         if (done) break;
         text += decoder.decode(value, { stream: true });
         setReading(text);
       }
     } catch (err) {
+      if (run.current !== mine) return;
       setError(err instanceof Error && err.message ? err.message : "The reading could not be completed. Try again.");
       setStage("confirm");
     } finally {
-      setStreaming(false);
+      if (run.current === mine) setStreaming(false);
     }
   }
 
   async function copyReading() {
     const cards = picks.map((p, i) => `${spread.positions[i].name}: ${cardLabel(p)}`).join("\n");
     try {
-      await navigator.clipboard.writeText(`${question}\n\n${cards}\n\n${reading}\n\nstarcoded.wtf`);
+      const head = answer ? `${question}\n\n${answer}.` : question;
+      await navigator.clipboard.writeText(`${head}\n\n${cards}\n\n${readingText}\n\nstarcoded.wtf`);
       setCopied(true);
     } catch {
       setError("The reading could not be copied. Select the text and copy it by hand.");
     }
   }
 
+  // Cancel anything still in flight from the reading being left behind.
+  function startOver() {
+    run.current++;
+    stream.current?.abort();
+    stream.current = null;
+    setStreaming(false);
+    closeCamera();
+  }
+
   function retake() {
+    startOver();
     setStage("ask");
     setCapture(null);
     setPicks([]);
@@ -607,14 +638,17 @@ export default function Home() {
   }
 
   function reset() {
+    startOver();
     setStage("ask");
     setQuestion("");
     setCapture(null);
     setPicks([]);
     setNotes("");
     setReading("");
+    setCopied(false);
     setError("");
     setQr(null);
+    window.scrollTo(0, 0);
   }
 
   const updatePick = (i: number, patch: Partial<Pick>) =>
@@ -696,7 +730,7 @@ export default function Home() {
             <textarea
               id="question"
               className="question"
-              placeholder="what do you want to know?"
+              placeholder={yesNo ? "ask a yes or no question." : "what do you want to know?"}
               value={question}
               maxLength={500}
               rows={3}
@@ -843,6 +877,7 @@ export default function Home() {
         {stage === "reading" && (
           <article className="reading stage">
             <h1 className="display asked">{question}</h1>
+            {answer && <p className="verdict">{answer}.</p>}
             {capture?.thumbs && (
               <div className="reading-map">
                 <SpreadMap slots={spread.slots} thumbs={capture.thumbs} reveal />
@@ -860,8 +895,8 @@ export default function Home() {
               ))}
             </ol>
             <div className="prose" aria-live="polite" aria-busy={streaming}>
-              {reading ? (
-                reading.split(/\n{2,}/).map((para, i) => <p key={i}>{para}</p>)
+              {readingText ? (
+                readingText.split(/\n{2,}/).map((para, i) => <p key={i}>{para}</p>)
               ) : (
                 <p className="quiet dots">reading your cards</p>
               )}

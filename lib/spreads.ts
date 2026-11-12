@@ -17,6 +17,13 @@ export const SPREADS: Spread[] = [
     slots: [{ x: 0, y: 0 }],
   },
   {
+    id: "yes-no",
+    name: "yes or no",
+    layout: "a single card, pulled for a question that can be answered yes or no",
+    positions: [{ name: "the answer", meaning: "yes, no, or maybe, and the reason behind it" }],
+    slots: [{ x: 0, y: 0 }],
+  },
+  {
     id: "past-present-future",
     name: "past, present, future",
     layout: "three cards in a row, read left to right",
